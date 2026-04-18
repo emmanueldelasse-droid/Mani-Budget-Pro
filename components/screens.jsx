@@ -61,6 +61,56 @@ function TxRow({ tx, isLast, onDelete }) {
     {onDelete && <button onClick={onDelete} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--muted)', fontSize:16, padding:'0 0 0 8px' }}>×</button>}
   </div>;
 }
+// ── SwipeRow : glisser à gauche pour supprimer ───────────────
+function SwipeRow({ children, onDelete, disabled }) {
+  const ref = React.useRef();
+  const startX = React.useRef(null);
+  const isDragging = React.useRef(false);
+  const [offset, setOffset] = React.useState(0);
+  const THRESHOLD = 80;
+
+  const start = (x) => { startX.current = x; isDragging.current = true; };
+  const move  = (x) => {
+    if (!isDragging.current || disabled) return;
+    const dx = Math.min(0, x - startX.current);
+    setOffset(dx);
+  };
+  const end = () => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    if (offset < -THRESHOLD) {
+      setOffset(-80);
+    } else {
+      setOffset(0);
+    }
+  };
+
+  return (
+    <div style={{ position:'relative', overflow:'hidden' }}>
+      {/* Fond rouge */}
+      <div style={{
+        position:'absolute', right:0, top:0, bottom:0, width:80,
+        background:'var(--neg)', display:'flex', alignItems:'center', justifyContent:'center',
+        cursor:'pointer',
+      }} onClick={()=>{ if(onDelete) onDelete(); setOffset(0); }}>
+        <span style={{ color:'#fff', fontSize:13, fontWeight:600 }}>Suppr.</span>
+      </div>
+      {/* Contenu glissant */}
+      <div ref={ref}
+        style={{ transform:`translateX(${offset}px)`, transition:isDragging.current?'none':'transform 0.2s ease', background:'var(--card)', position:'relative', zIndex:1, touchAction:'pan-y' }}
+        onMouseDown={e=>start(e.clientX)}
+        onMouseMove={e=>move(e.clientX)}
+        onMouseUp={end} onMouseLeave={end}
+        onTouchStart={e=>start(e.touches[0].clientX)}
+        onTouchMove={e=>{ e.stopPropagation(); move(e.touches[0].clientX); }}
+        onTouchEnd={end}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 const iconBtn = { width:36, height:36, borderRadius:999, background:'var(--chip-bg)', color:'var(--fg)', border:'none', cursor:'pointer', fontSize:20, display:'inline-flex', alignItems:'center', justifyContent:'center', fontFamily:'inherit', fontWeight:500 };
 
 // ── Screen : Accueil ─────────────────────────────────────────
@@ -251,21 +301,22 @@ function ScreenMois({ monthKey, setMonthKey, onOpenAdd, setTab }) {
           ) : gains.map((g,i) => {
             const isAdded = window.STORE.get().addedGains.some(x=>x.monthKey===m.monthKey && x.detail===g.detail && x.amount===g.amount);
             return (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom:i===gains.length-1?'none':'1px solid var(--line)' }}>
-                <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
-                  {fmtDate(g.date)}
+              <SwipeRow key={i}
+                onDelete={isAdded ? ()=>{ const x=window.STORE.get().addedGains.find(x=>x.monthKey===m.monthKey&&x.detail===g.detail&&x.amount===g.amount); if(x) window.STORE.deleteAdded(x.id); } : null}
+                disabled={!isAdded}
+              >
+                <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom:i===gains.length-1?'none':'1px solid var(--line)' }}>
+                  <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
+                    {fmtDate(g.date)}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.detail||'—'}</div>
+                  </div>
+                  <div style={{ fontSize:14, fontWeight:600, fontVariantNumeric:'tabular-nums', color:'var(--pos)', flexShrink:0 }}>
+                    +{window.fmtEur(g.amount).replace('−','')}
+                  </div>
                 </div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.detail||'—'}</div>
-                </div>
-                <div style={{ fontSize:14, fontWeight:600, fontVariantNumeric:'tabular-nums', color:'var(--pos)', flexShrink:0 }}>
-                  +{window.fmtEur(g.amount).replace('−','')}
-                </div>
-                {isAdded && (
-                  <button onClick={()=>{ const x=window.STORE.get().addedGains.find(x=>x.monthKey===m.monthKey&&x.detail===g.detail&&x.amount===g.amount); if(x) window.STORE.deleteAdded(x.id); }}
-                    style={{ background:'none', border:'none', cursor:'pointer', color:'var(--muted)', fontSize:16, padding:'0 0 0 4px', flexShrink:0 }}>×</button>
-                )}
-              </div>
+              </SwipeRow>
             );
           })}
         </Card>
@@ -289,26 +340,24 @@ function ScreenMois({ monthKey, setMonthKey, onOpenAdd, setTab }) {
             const cat = t.category||'Autre';
             const isAdded = t.id || window.STORE.get().addedTx.some(x=>x.monthKey===m.monthKey&&x.detail===t.detail&&Math.abs(x.amount)===Math.abs(t.amount));
             return (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom:i===depenses.length-1?'none':'1px solid var(--line)' }}>
-                <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
-                  {fmtDate(t.date)}
-                </div>
-                <div style={{ width:8, height:8, borderRadius:999, background:window.CAT_COLORS[cat]||'var(--muted)', flexShrink:0 }}/>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.detail||'—'}</div>
-                  <div style={{ fontSize:11, color:'var(--muted)', display:'flex', gap:5 }}>
-                    <span>{cat}</span>
-                    {t.type==='fixe' && <span style={{ fontSize:9, padding:'1px 5px', background:'var(--chip-bg)', borderRadius:4 }}>FIXE</span>}
+              <SwipeRow key={i} onDelete={t.id ? ()=>window.STORE.deleteAdded(t.id) : null} disabled={!t.id}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom:i===depenses.length-1?'none':'1px solid var(--line)' }}>
+                  <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
+                    {fmtDate(t.date)}
+                  </div>
+                  <div style={{ width:8, height:8, borderRadius:999, background:window.CAT_COLORS[cat]||'var(--muted)', flexShrink:0 }}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.detail||'—'}</div>
+                    <div style={{ fontSize:11, color:'var(--muted)', display:'flex', gap:5 }}>
+                      <span>{cat}</span>
+                      {t.type==='fixe' && <span style={{ fontSize:9, padding:'1px 5px', background:'var(--chip-bg)', borderRadius:4 }}>FIXE</span>}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:14, fontWeight:500, fontVariantNumeric:'tabular-nums', color:'var(--neg)', flexShrink:0 }}>
+                    −{window.fmtEur(t.amount).replace('−','')}
                   </div>
                 </div>
-                <div style={{ fontSize:14, fontWeight:500, fontVariantNumeric:'tabular-nums', color:'var(--neg)', flexShrink:0 }}>
-                  −{window.fmtEur(t.amount).replace('−','')}
-                </div>
-                {t.id && (
-                  <button onClick={()=>window.STORE.deleteAdded(t.id)}
-                    style={{ background:'none', border:'none', cursor:'pointer', color:'var(--muted)', fontSize:16, padding:'0 0 0 4px', flexShrink:0 }}>×</button>
-                )}
-              </div>
+              </SwipeRow>
             );
           })}
         </Card>
@@ -635,7 +684,7 @@ function ScreenGoals() {
 
 // Exports
 Object.assign(window, {
-  Card, Section, Chip, CatDot, Bars, Spark, Donut, TxRow, iconBtn,
+  Card, Section, Chip, CatDot, Bars, Spark, Donut, TxRow, SwipeRow, iconBtn,
   ScreenHome, ScreenMois, ScreenAccounts, ScreenHistory,
   ScreenCharts, ScreenCategories, ScreenGoals,
 });

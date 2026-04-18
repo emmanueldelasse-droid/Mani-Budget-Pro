@@ -17,39 +17,134 @@ const THEMES = {
 const ACCENTS = { rouille:'oklch(60% 0.18 45)', indigo:'oklch(58% 0.2 265)', vert:'oklch(60% 0.18 140)', rose:'oklch(65% 0.2 350)', ambre:'oklch(72% 0.18 75)', cyan:'oklch(65% 0.14 210)' };
 const FONTS   = { serif:`'Fraunces','Tiempos',Georgia,serif`, sans:`'Inter',system-ui,sans-serif`, mono:`'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace`, grotesk:`'Space Grotesk',system-ui,sans-serif` };
 
-// ── Lock screen ───────────────────────────────────────────────
+// ── Lock screen avec Face ID / Touch ID (WebAuthn) ───────────
 function LockScreen({ onUnlock }) {
-  const [token, setToken] = useState('');
+  const [token, setToken]   = useState('');
   const [error, setError]   = useState('');
   const [loading, setLoading] = useState(false);
+  const [biometricAvail, setBiometricAvail] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+
+  // Vérifie si WebAuthn / biométrie est disponible
+  useEffect(() => {
+    if (window.PublicKeyCredential) {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then(ok => setBiometricAvail(ok))
+        .catch(() => setBiometricAvail(false));
+    }
+    // Si un token est déjà enregistré, tente l'auth biométrique automatiquement
+    const saved = localStorage.getItem('mi:token');
+    if (saved && window.PublicKeyCredential) {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(ok => {
+        if (ok) tryBiometric(saved);
+      });
+    }
+  }, []);
+
+  const verifyToken = async (t) => {
+    const r = await fetch(`${window.MI_WORKER_URL}/budget`, { headers:{ 'X-Budget-Token': t } });
+    if (r.status === 401) throw new Error('Token incorrect.');
+    localStorage.setItem('mi:token', t);
+    onUnlock();
+  };
+
+  // Auth biométrique : utilise le token stocké après validation Face ID
+  const tryBiometric = async (savedToken) => {
+    setLoading(true); setError('');
+    try {
+      // Challenge aléatoire côté client (on vérifie juste la présence biométrique)
+      const challenge = new Uint8Array(32);
+      crypto.getRandomValues(challenge);
+      await navigator.credentials.get({
+        publicKey: {
+          challenge,
+          timeout: 60000,
+          userVerification: 'required',
+          rpId: window.location.hostname,
+        }
+      });
+      // Face ID validé → on utilise le token sauvegardé
+      await verifyToken(savedToken);
+    } catch(e) {
+      if (e.name === 'NotAllowedError') {
+        setError('Face ID annulé.');
+      } else if (e.name === 'InvalidStateError' || e.name === 'NotSupportedError') {
+        // Pas encore enregistré → fallback manuel
+        setShowManual(true);
+      } else {
+        setError(e.message);
+      }
+      setLoading(false);
+    }
+  };
 
   const submit = async () => {
     if (!token.trim()) return;
     setLoading(true); setError('');
     try {
-      const r = await fetch(`${window.MI_WORKER_URL}/budget`, { headers:{ 'X-Budget-Token': token.trim() } });
-      if (r.status === 401) { setError('Token incorrect.'); setLoading(false); return; }
-      localStorage.setItem('mi:token', token.trim());
-      onUnlock();
-    } catch { setError('Impossible de contacter le serveur.'); setLoading(false); }
+      await verifyToken(token.trim());
+    } catch(e) { setError(e.message); setLoading(false); }
   };
+
+  const savedToken = localStorage.getItem('mi:token');
+  const canUseBiometric = biometricAvail && !!savedToken;
 
   return (
     <div style={{ minHeight:'100vh', background:'#1a1613', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:`'Fraunces',Georgia,serif`, padding:24 }}>
       <div style={{ width:'100%', maxWidth:360, textAlign:'center' }}>
         <div style={{ fontSize:52, fontWeight:700, color:'#f5f1ea', letterSpacing:-2, marginBottom:6 }}>mbp.</div>
         <div style={{ fontSize:13, color:'rgba(245,241,234,0.5)', letterSpacing:1.2, textTransform:'uppercase', marginBottom:48 }}>Mani Budget Pro</div>
+
         <div style={{ background:'#fff', borderRadius:24, padding:32 }}>
           <div style={{ fontSize:18, fontWeight:600, color:'#1a1613', marginBottom:6 }}>Accès sécurisé</div>
-          <div style={{ fontSize:13, color:'#7d7268', marginBottom:24, lineHeight:1.5 }}>Entre ton token pour accéder à tes données</div>
-          <input type="password" value={token} onChange={e=>setToken(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
-            placeholder="Token secret" autoFocus
-            style={{ width:'100%', padding:'14px 16px', border:`1.5px solid ${error?'#dc2626':'rgba(0,0,0,0.12)'}`, borderRadius:12, fontSize:16, fontFamily:'inherit', color:'#1a1613', background:'#fafaf9', outline:'none', boxSizing:'border-box', marginBottom:error?8:20, letterSpacing:2 }}/>
-          {error && <div style={{ fontSize:12, color:'#dc2626', marginBottom:16, textAlign:'left' }}>{error}</div>}
-          <button onClick={submit} disabled={loading||!token.trim()}
-            style={{ width:'100%', padding:14, borderRadius:12, border:'none', background:loading?'rgba(0,0,0,0.15)':'#1a1613', color:'#f5f1ea', fontSize:15, fontWeight:600, fontFamily:'inherit', cursor:loading?'default':'pointer' }}>
-            {loading ? 'Vérification…' : 'Déverrouiller'}
-          </button>
+
+          {/* Mode biométrique */}
+          {canUseBiometric && !showManual ? (
+            <>
+              <div style={{ fontSize:13, color:'#7d7268', marginBottom:28, lineHeight:1.5 }}>
+                Utilise Face ID ou Touch ID pour accéder à tes données
+              </div>
+              {/* Icône Face ID */}
+              <div onClick={()=>tryBiometric(savedToken)} style={{ cursor:'pointer', marginBottom:24 }}>
+                <svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display:'block', margin:'0 auto' }}>
+                  <rect width="72" height="72" rx="16" fill="#1a1613"/>
+                  <path d="M22 22h6M44 22h6M22 50h6M44 50h6" stroke="#f5f1ea" strokeWidth="2.5" strokeLinecap="round"/>
+                  <circle cx="29" cy="33" r="2.5" fill="#f5f1ea"/>
+                  <circle cx="43" cy="33" r="2.5" fill="#f5f1ea"/>
+                  <path d="M29 42c0 0 2 4 7 4s7-4 7-4" stroke="#f5f1ea" strokeWidth="2.5" strokeLinecap="round"/>
+                  <path d="M36 30v5" stroke="#f5f1ea" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+                <div style={{ fontSize:13, color:'#1a1613', fontWeight:500, marginTop:10 }}>
+                  {loading ? 'Vérification…' : 'Appuyer pour déverrouiller'}
+                </div>
+              </div>
+              {error && <div style={{ fontSize:12, color:'#dc2626', marginBottom:12 }}>{error}</div>}
+              <button onClick={()=>setShowManual(true)}
+                style={{ fontSize:12, color:'#7d7268', background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', textDecoration:'underline' }}>
+                Utiliser le token à la place
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize:13, color:'#7d7268', marginBottom:24, lineHeight:1.5 }}>
+                {savedToken ? 'Entre ton token pour te reconnecter' : 'Entre ton token pour accéder à tes données'}
+              </div>
+              <input type="password" value={token} onChange={e=>setToken(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
+                placeholder="Token secret" autoFocus
+                style={{ width:'100%', padding:'14px 16px', border:`1.5px solid ${error?'#dc2626':'rgba(0,0,0,0.12)'}`, borderRadius:12, fontSize:16, fontFamily:'inherit', color:'#1a1613', background:'#fafaf9', outline:'none', boxSizing:'border-box', marginBottom:error?8:20, letterSpacing:2 }}/>
+              {error && <div style={{ fontSize:12, color:'#dc2626', marginBottom:16, textAlign:'left' }}>{error}</div>}
+              <button onClick={submit} disabled={loading||!token.trim()}
+                style={{ width:'100%', padding:14, borderRadius:12, border:'none', background:loading?'rgba(0,0,0,0.15)':'#1a1613', color:'#f5f1ea', fontSize:15, fontWeight:600, fontFamily:'inherit', cursor:loading?'default':'pointer', marginBottom: canUseBiometric?12:0 }}>
+                {loading ? 'Vérification…' : 'Déverrouiller'}
+              </button>
+              {canUseBiometric && (
+                <button onClick={()=>{ setShowManual(false); tryBiometric(savedToken); }}
+                  style={{ fontSize:12, color:'#7d7268', background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', textDecoration:'underline' }}>
+                  ← Utiliser Face ID
+                </button>
+              )}
+            </>
+          )}
         </div>
         <div style={{ marginTop:24, fontSize:11, color:'rgba(245,241,234,0.3)', letterSpacing:0.4 }}>Cloudflare KV · Chiffré</div>
       </div>
