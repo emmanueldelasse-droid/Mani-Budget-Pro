@@ -125,6 +125,15 @@ function ScreenHome({ monthKey, setMonthKey, onOpenAdd, setTab }) {
 function ScreenMois({ monthKey, setMonthKey, onOpenAdd, setTab }) {
   const [, bump] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
+  // Inline quick-add
+  const [addMode, setAddMode]   = useState(null); // null | 'entree' | 'depense'
+  const [addAmount, setAddAmount] = useState('');
+  const [addDetail, setAddDetail] = useState('');
+  const [addDate, setAddDate]   = useState(() => {
+    const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  });
+  const [addCat, setAddCat]     = useState('Courses');
+
   useEffect(() => window.STORE.subscribe(() => bump(x=>x+1)), []);
 
   const months  = window.STORE.getMonths();
@@ -135,19 +144,60 @@ function ScreenMois({ monthKey, setMonthKey, onOpenAdd, setTab }) {
   const next    = idx<months.length-1 ? months[idx+1] : null;
   const isLast  = idx===months.length-1;
 
-  const totalOut   = summary.totalFixes + summary.totalVar;
-  const catEntries = Object.entries(summary.byCategory).sort((a,b)=>b[1]-a[1]).slice(0,6);
-  const txs        = m.allTx.slice(0,15);
-
-  const today  = new Date();
-  const isCurr = m.year===today.getFullYear() && m.month===today.getMonth()+1;
-  const fixes  = (m.depFixes||[]).filter(d=>typeof d.day==='number').sort((a,b)=>a.day-b.day);
-  const upcoming = isCurr ? fixes.filter(f=>f.day>=today.getDate()).slice(0,5) : fixes.slice(0,5);
+  // Entrées triées par date desc
+  const gains = [...m.gains].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  // Dépenses (fixes + variables) triées par date desc
+  const depenses = [...m.allTx].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
   const handleCreateNext = () => {
     const key = window.STORE.createNextMonth(m.monthKey);
-    if (key) { setMonthKey(key); setShowCreate(false); }
+    if (key) setMonthKey(key);
   };
+
+  const saveAdd = () => {
+    const amt = parseFloat(addAmount);
+    if (!amt || isNaN(amt) || !addDetail.trim()) return;
+    if (addMode==='entree') {
+      window.STORE.addGain({ monthKey:m.monthKey, date:addDate, detail:addDetail, amount:amt });
+    } else {
+      window.STORE.addTx({ monthKey:m.monthKey, date:addDate, detail:addDetail, amount:amt, category:addCat, type:'var' });
+    }
+    setAddAmount(''); setAddDetail(''); setAddMode(null);
+  };
+
+  const fmtDate = d => {
+    if (!d) return '—';
+    const parts = d.split('-');
+    return parts.length===3 ? `${parts[2]}/${parts[1]}` : d;
+  };
+
+  const inputS = { padding:'10px 12px', border:'1px solid var(--line)', borderRadius:10, background:'var(--card)', color:'var(--fg)', fontSize:14, fontFamily:'inherit', outline:'none', boxSizing:'border-box' };
+
+  // Inline add form
+  const AddForm = ({ mode }) => (
+    <div style={{ padding:'12px 16px', background:'var(--accent-soft)', borderRadius:12, marginBottom:8 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+        <input value={addDetail} onChange={e=>setAddDetail(e.target.value)} placeholder="Libellé" style={{...inputS}} autoFocus/>
+        <input type="number" value={addAmount} onChange={e=>setAddAmount(e.target.value)} placeholder="Montant €" style={{...inputS}} min="0" step="0.01"/>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+        <input type="date" value={addDate} onChange={e=>setAddDate(e.target.value)} style={{...inputS}}/>
+        {mode==='depense' && (
+          <select value={addCat} onChange={e=>setAddCat(e.target.value)} style={{...inputS}}>
+            {window.CAT_ORDER.map(c=><option key={c}>{c}</option>)}
+          </select>
+        )}
+      </div>
+      <div style={{ display:'flex', gap:8 }}>
+        <button onClick={saveAdd} style={{ flex:1, padding:'10px', background:'var(--accent)', color:'var(--accent-fg)', border:'none', borderRadius:10, fontWeight:600, fontSize:14, fontFamily:'inherit', cursor:'pointer' }}>
+          Ajouter
+        </button>
+        <button onClick={()=>setAddMode(null)} style={{ padding:'10px 16px', background:'transparent', color:'var(--muted)', border:'1px solid var(--line)', borderRadius:10, fontSize:14, fontFamily:'inherit', cursor:'pointer' }}>
+          Annuler
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="screen">
@@ -162,79 +212,107 @@ function ScreenMois({ monthKey, setMonthKey, onOpenAdd, setTab }) {
         <button onClick={()=>next&&setMonthKey(next.monthKey)} disabled={!next} style={iconBtn}>›</button>
       </div>
 
-      {/* Hero */}
-      <div style={{ background:'var(--hero-bg)', color:'var(--hero-fg)', borderRadius:22, padding:22, marginBottom:16, border:'1px solid var(--line)' }}>
+      {/* Hero solde */}
+      <div style={{ background:'var(--hero-bg)', color:'var(--hero-fg)', borderRadius:22, padding:20, marginBottom:16, border:'1px solid var(--line)' }}>
         <div style={{ fontSize:11, opacity:0.6, letterSpacing:1, textTransform:'uppercase', marginBottom:4 }}>Reste</div>
-        <div style={{ fontSize:42, fontWeight:600, letterSpacing:-1.5, fontVariantNumeric:'tabular-nums', color:summary.reste<0?'var(--neg)':'var(--hero-fg)' }}>
+        <div style={{ fontSize:40, fontWeight:600, letterSpacing:-1.5, fontVariantNumeric:'tabular-nums', color:summary.reste<0?'var(--neg)':'var(--hero-fg)' }}>
           {window.fmtEur(summary.reste,{signed:true})}
         </div>
-        <div style={{ display:'flex', gap:24, marginTop:16, fontSize:13 }}>
-          {[['Entrées',summary.totalGains],['Fixes',-summary.totalFixes],['Variables',-summary.totalVar]].map(([l,v])=>(
-            <div key={l}><div style={{ opacity:0.6 }}>{l}</div><div style={{ fontWeight:500 }}>{window.fmtEur(v,{signed:l!=='Entrées'})}</div></div>
-          ))}
+        <div style={{ display:'flex', gap:20, marginTop:14, fontSize:12 }}>
+          <div><div style={{ opacity:0.55 }}>Entrées</div><div style={{ fontWeight:500 }}>{window.fmtEur(summary.totalGains)}</div></div>
+          <div><div style={{ opacity:0.55 }}>Fixes</div><div style={{ fontWeight:500 }}>{window.fmtEur(-summary.totalFixes,{signed:true})}</div></div>
+          <div><div style={{ opacity:0.55 }}>Variables</div><div style={{ fontWeight:500 }}>{window.fmtEur(-summary.totalVar,{signed:true})}</div></div>
         </div>
       </div>
 
-      {/* Bouton créer mois suivant (uniquement sur le dernier mois) */}
+      {/* Bouton créer mois suivant */}
       {isLast && (
         <button onClick={handleCreateNext}
-          style={{ width:'100%', padding:12, background:'var(--card)', color:'var(--fg)', border:'1px solid var(--line)', borderRadius:14, fontWeight:500, fontSize:14, fontFamily:'inherit', cursor:'pointer', marginBottom:20 }}>
+          style={{ width:'100%', padding:11, background:'var(--card)', color:'var(--fg)', border:'1px solid var(--line)', borderRadius:13, fontWeight:500, fontSize:13, fontFamily:'inherit', cursor:'pointer', marginBottom:18 }}>
           + Créer {window.MONTH_FR[m.month%12]} {m.month===12?m.year+1:m.year}
           {summary.reste<0 && <span style={{ fontSize:11, color:'var(--neg)', marginLeft:8 }}>· découvert {window.fmtEur(summary.reste)} reporté</span>}
         </button>
       )}
 
-      {/* Prochains prélèvements */}
-      {upcoming.length>0 && (
-        <Section title="Prochains prélèvements">
-          <Card pad={0}>
-            {upcoming.map((f,i)=>(
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:14, padding:'11px 16px', borderTop:i===0?'none':'1px solid var(--line)' }}>
-                <div style={{ width:38, padding:'5px 0', textAlign:'center', borderRadius:10, background:'var(--accent-soft)', color:'var(--accent)', flexShrink:0 }}>
-                  <div style={{ fontSize:15, fontWeight:600 }}>{String(f.day).padStart(2,'0')}</div>
-                </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:500 }}>{f.detail}</div>
-                  <div style={{ fontSize:11, color:'var(--muted)', display:'flex', alignItems:'center', gap:5 }}><CatDot cat={f.category} size={7}/>{f.category}</div>
-                </div>
-                <div style={{ fontSize:13, fontWeight:500, fontVariantNumeric:'tabular-nums' }}>−{window.fmtEur(f.amount).replace('−','')}</div>
-              </div>
-            ))}
-          </Card>
-        </Section>
-      )}
+      {/* ── BLOC ENTRÉES ── */}
+      <div style={{ marginBottom:24 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, padding:'0 2px' }}>
+          <h3 style={{ margin:0, fontSize:11, fontWeight:600, letterSpacing:0.8, textTransform:'uppercase', color:'var(--muted)' }}>
+            Entrées <span style={{ color:'var(--pos)', marginLeft:4 }}>{window.fmtEur(summary.totalGains)}</span>
+          </h3>
+          <button onClick={()=>setAddMode(addMode==='entree'?null:'entree')} style={{ width:28, height:28, borderRadius:999, background:'var(--pos)', color:'#fff', border:'none', cursor:'pointer', fontSize:18, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'inherit' }}>+</button>
+        </div>
 
-      {/* Top catégories */}
-      {catEntries.length>0 && (
-        <Section title="Top catégories">
-          <Card pad={0}>
-            {catEntries.map(([cat,val],i)=>{
-              const pct=totalOut?val/totalOut*100:0;
-              return (
-                <div key={cat} style={{ padding:'12px 16px', borderTop:i===0?'none':'1px solid var(--line)' }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:8 }}><CatDot cat={cat}/><span style={{ fontSize:14, fontWeight:500 }}>{cat}</span></div>
-                    <span style={{ fontVariantNumeric:'tabular-nums', fontWeight:500, fontSize:14 }}>{window.fmtEur(val)}</span>
-                  </div>
-                  <div style={{ height:3, background:'var(--line)', borderRadius:2 }}><div style={{ height:'100%', width:`${pct}%`, background:window.CAT_COLORS[cat], borderRadius:2 }}/></div>
-                </div>
-              );
-            })}
-          </Card>
-        </Section>
-      )}
+        {addMode==='entree' && <AddForm mode="entree"/>}
 
-      {/* Transactions */}
-      <Section title="Transactions">
         <Card pad={0}>
-          {txs.length===0
-            ? <div style={{ padding:24, textAlign:'center', color:'var(--muted)', fontSize:13 }}>Aucune transaction. Appuie sur + pour ajouter.</div>
-            : txs.map((t,i)=>(
-                <TxRow key={i} tx={t} isLast={i===txs.length-1}
-                  onDelete={t.id ? ()=>window.STORE.deleteAdded(t.id) : null}/>
-              ))}
+          {gains.length===0 ? (
+            <div style={{ padding:20, textAlign:'center', color:'var(--muted)', fontSize:13 }}>Aucune entrée ce mois.</div>
+          ) : gains.map((g,i) => {
+            const isAdded = window.STORE.get().addedGains.some(x=>x.monthKey===m.monthKey && x.detail===g.detail && x.amount===g.amount);
+            return (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom:i===gains.length-1?'none':'1px solid var(--line)' }}>
+                <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
+                  {fmtDate(g.date)}
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.detail||'—'}</div>
+                </div>
+                <div style={{ fontSize:14, fontWeight:600, fontVariantNumeric:'tabular-nums', color:'var(--pos)', flexShrink:0 }}>
+                  +{window.fmtEur(g.amount).replace('−','')}
+                </div>
+                {isAdded && (
+                  <button onClick={()=>{ const x=window.STORE.get().addedGains.find(x=>x.monthKey===m.monthKey&&x.detail===g.detail&&x.amount===g.amount); if(x) window.STORE.deleteAdded(x.id); }}
+                    style={{ background:'none', border:'none', cursor:'pointer', color:'var(--muted)', fontSize:16, padding:'0 0 0 4px', flexShrink:0 }}>×</button>
+                )}
+              </div>
+            );
+          })}
         </Card>
-      </Section>
+      </div>
+
+      {/* ── BLOC DÉPENSES ── */}
+      <div style={{ marginBottom:24 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, padding:'0 2px' }}>
+          <h3 style={{ margin:0, fontSize:11, fontWeight:600, letterSpacing:0.8, textTransform:'uppercase', color:'var(--muted)' }}>
+            Dépenses <span style={{ color:'var(--neg)', marginLeft:4 }}>{window.fmtEur(summary.totalFixes+summary.totalVar)}</span>
+          </h3>
+          <button onClick={()=>setAddMode(addMode==='depense'?null:'depense')} style={{ width:28, height:28, borderRadius:999, background:'var(--neg)', color:'#fff', border:'none', cursor:'pointer', fontSize:18, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'inherit' }}>+</button>
+        </div>
+
+        {addMode==='depense' && <AddForm mode="depense"/>}
+
+        <Card pad={0}>
+          {depenses.length===0 ? (
+            <div style={{ padding:20, textAlign:'center', color:'var(--muted)', fontSize:13 }}>Aucune dépense ce mois.</div>
+          ) : depenses.map((t,i) => {
+            const cat = t.category||'Autre';
+            const isAdded = t.id || window.STORE.get().addedTx.some(x=>x.monthKey===m.monthKey&&x.detail===t.detail&&Math.abs(x.amount)===Math.abs(t.amount));
+            return (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom:i===depenses.length-1?'none':'1px solid var(--line)' }}>
+                <div style={{ width:34, minWidth:34, textAlign:'center', fontSize:12, fontWeight:600, color:'var(--muted)', fontVariantNumeric:'tabular-nums' }}>
+                  {fmtDate(t.date)}
+                </div>
+                <div style={{ width:8, height:8, borderRadius:999, background:window.CAT_COLORS[cat]||'var(--muted)', flexShrink:0 }}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.detail||'—'}</div>
+                  <div style={{ fontSize:11, color:'var(--muted)', display:'flex', gap:5 }}>
+                    <span>{cat}</span>
+                    {t.type==='fixe' && <span style={{ fontSize:9, padding:'1px 5px', background:'var(--chip-bg)', borderRadius:4 }}>FIXE</span>}
+                  </div>
+                </div>
+                <div style={{ fontSize:14, fontWeight:500, fontVariantNumeric:'tabular-nums', color:'var(--neg)', flexShrink:0 }}>
+                  −{window.fmtEur(t.amount).replace('−','')}
+                </div>
+                {t.id && (
+                  <button onClick={()=>window.STORE.deleteAdded(t.id)}
+                    style={{ background:'none', border:'none', cursor:'pointer', color:'var(--muted)', fontSize:16, padding:'0 0 0 4px', flexShrink:0 }}>×</button>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+      </div>
 
       <div style={{ height:80 }}/>
     </div>

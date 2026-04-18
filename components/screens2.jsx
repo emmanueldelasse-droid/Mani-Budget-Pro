@@ -26,12 +26,12 @@ function autoCategorize(detail) {
 function OcrPanel({ ocrFile, setOcrFile, ocrResult, setOcrResult, ocrLoading, ocrSelected, setOcrSelected, fileRef, runOcr, importOcr, dupCount }) {
   return (
     <>
-      <input type="file" ref={fileRef} accept="image/*" style={{ display:'none' }}
+      <input type="file" ref={fileRef} accept="image/*" multiple style={{ display:'none' }}
         onChange={async e => {
-          const f = e.target.files[0];
-          if (!f) return;
-          setOcrFile(f); setOcrResult(null);
-          await runOcr(f);
+          const files = Array.from(e.target.files);
+          if (!files.length) return;
+          setOcrFile(files[0]); setOcrResult(null);
+          await runOcrMultiple(files);
         }}/>
 
       {!ocrFile && (
@@ -44,15 +44,16 @@ function OcrPanel({ ocrFile, setOcrFile, ocrResult, setOcrResult, ocrLoading, oc
           <div style={{ fontSize:32 }}>📷</div>
           <div style={{ fontSize:15, fontWeight:500, color:'var(--fg)' }}>Screenshot de ton app bancaire</div>
           <div style={{ fontSize:12 }}>Société Générale · Revolut</div>
-          <div style={{ fontSize:11 }}>Claude extrait les transactions automatiquement</div>
+          <div style={{ fontSize:11 }}>Sélectionne une ou plusieurs photos</div>
         </button>
       )}
 
       {ocrFile && (
         <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12, color:'var(--muted)', marginBottom:6 }}>📷 Photo analysée</div>
           <img src={URL.createObjectURL(ocrFile)} style={{ width:'100%', maxHeight:200, objectFit:'contain', borderRadius:12, background:'var(--card)', border:'1px solid var(--line)' }}/>
           <button onClick={()=>fileRef.current.click()} style={{ marginTop:8, width:'100%', padding:10, border:'1px solid var(--line)', borderRadius:10, background:'transparent', color:'var(--fg)', fontFamily:'inherit', fontSize:13, cursor:'pointer' }}>
-            Changer d'image
+            Ajouter / changer des photos
           </button>
         </div>
       )}
@@ -145,25 +146,36 @@ function ScreenAdd({ onClose, monthKey }) {
     onClose();
   };
 
-  // OCR via Cloudflare Worker (qui appelle Claude API côté serveur)
-  const runOcr = async file => {
+  // OCR via Cloudflare Worker — supporte plusieurs photos
+  const analyzeOne = async (file) => {
+    const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
+    const resp = await fetch(`${window.MI_WORKER_URL}/ocr`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'X-Budget-Token': localStorage.getItem('mi:token')||'' },
+      body: JSON.stringify({ image:b64, mediaType:file.type||'image/png', monthKey:mk }),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    return data.transactions || [];
+  };
+
+  const runOcr = async file => runOcrMultiple([file]);
+
+  const runOcrMultiple = async files => {
     setOcrLoading(true);
     try {
-      const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
-      const resp = await fetch(`${window.MI_WORKER_URL}/ocr`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Budget-Token': localStorage.getItem('mi:token') || '',
-        },
-        body: JSON.stringify({
-          image: b64,
-          mediaType: file.type || 'image/png',
-          monthKey: mk,
-        }),
+      // Analyse toutes les photos en parallèle
+      const results = await Promise.all(files.map(f => analyzeOne(f)));
+      // Fusionne toutes les transactions
+      const allTx = results.flat();
+      // Déduplique par detail+amount dans la liste elle-même
+      const seen = new Set();
+      const unique = allTx.filter(t => {
+        const key = `${t.detail?.toLowerCase().trim()}|${t.amount}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
       });
-      const parsed = await resp.json();
-      if (parsed.error) throw new Error(parsed.error);
+      const parsed = { transactions: unique };
 
       // Détection doublons
       const duplicates = {};
