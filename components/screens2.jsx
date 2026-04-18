@@ -145,41 +145,25 @@ function ScreenAdd({ onClose, monthKey }) {
     onClose();
   };
 
-  // OCR via Claude API
+  // OCR via Cloudflare Worker (qui appelle Claude API côté serveur)
   const runOcr = async file => {
     setOcrLoading(true);
     try {
       const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch(`${window.MI_WORKER_URL}/ocr`, {
         method: 'POST',
-        headers: { 'Content-Type':'application/json', 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Budget-Token': localStorage.getItem('mi:token') || '',
+        },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: [
-              { type:'image', source:{ type:'base64', media_type:file.type||'image/png', data:b64 } },
-              { type:'text', text:`Tu es un assistant qui extrait des transactions bancaires depuis des screenshots d'apps bancaires françaises (Société Générale, Revolut, etc.).
-
-Extrais TOUTES les transactions visibles. Réponds UNIQUEMENT avec du JSON valide sans markdown :
-{"transactions":[{"date":"YYYY-MM-DD","detail":"libellé exact","amount":-45.20}]}
-
-Règles :
-- Les débits (paiements) = montant NÉGATIF
-- Les crédits (virements reçus, remboursements) = montant POSITIF  
-- Si la date n'est pas complète, utilise le mois courant ${mk}
-- Garde le libellé exact tel qu'il apparaît dans l'app
-- Ignore les soldes, les totaux, les en-têtes — uniquement les lignes de transaction` }
-            ]
-          }]
-        })
+          image: b64,
+          mediaType: file.type || 'image/png',
+          monthKey: mk,
+        }),
       });
-      const data = await resp.json();
-      const text = data.content?.map(c=>c.text||'').join('') || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('Aucun JSON dans la réponse');
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = await resp.json();
+      if (parsed.error) throw new Error(parsed.error);
 
       // Détection doublons
       const duplicates = {};
